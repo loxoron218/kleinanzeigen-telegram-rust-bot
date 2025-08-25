@@ -114,10 +114,7 @@ Führen Sie die folgenden Befehle aus, um Ihren neuen Dienst zu installieren und
 sudo systemctl daemon-reload
 
 # Dienst für den Start beim Booten aktivieren
-sudo systemctl enable kleinanzeigen.service
-
-# Dienst sofort starten
-sudo systemctl start kleinanzeigen.service
+sudo systemctl enable --now kleinanzeigen.service
 ```
 
 ## Überprüfung des Dienstes
