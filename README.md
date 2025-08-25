@@ -94,12 +94,6 @@ WorkingDirectory=/home/user/.local/share/kleinanzeigen-telegram-rust-bot
 
 # Pfad zum kompilierten Binary
 ExecStart=/home/user/.local/share/telegram-rust-bot/target/release/telegram-rust-bot
-
-Restart=on-failure
-RestartSec=5s
-
-[Install]
-WantedBy=multi-user.target
 ```
 
 **Hinweis:** `~` funktioniert in systemd-Service-Dateien nicht, daher müssen Sie den vollständigen Pfad wie `/home/user/` verwenden.
