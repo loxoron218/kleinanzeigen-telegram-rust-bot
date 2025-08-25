@@ -8,7 +8,7 @@ use std::{
 use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use serde_json::{from_str, to_string_pretty};
+use serde_json::{from_slice, from_str, to_string_pretty};
 use tokio::time::sleep;
 
 // --- Configuration ---
@@ -36,6 +36,26 @@ struct Ad {
     link: String,
     /// The URL of the ad's main image, if available.
     image_url: Option<String>,
+}
+
+/// Represents a Telegram API error response.
+#[derive(Debug, Deserialize)]
+struct TelegramError {
+    /// Whether the request was successful.
+    ok: bool,
+    /// The error code.
+    error_code: Option<i32>,
+    /// The error description.
+    description: Option<String>,
+    /// Additional parameters for the error.
+    parameters: Option<TelegramErrorParameters>,
+}
+
+/// Additional parameters for Telegram API errors.
+#[derive(Debug, Deserialize)]
+struct TelegramErrorParameters {
+    /// Time to wait before retrying (for rate limiting).
+    retry_after: Option<i64>,
 }
 
 // --- Functions ---
@@ -138,11 +158,17 @@ async fn scrape_kleinanzeigen_page(client: &Client, url: &str) -> Result<Vec<Ad>
 /// * `client` - The `reqwest::Client` to use for the API call.
 /// * `photo_url` - The URL of the image to send.
 /// * `caption` - The HTML-formatted caption for the photo.
+/// Sends a photo with a caption to the configured Telegram group.
+///
+/// # Arguments
+/// * `client` - The `reqwest::Client` to use for the API call.
+/// * `photo_url` - The URL of the image to send.
+/// * `caption` - The HTML-formatted caption for the photo.
 async fn send_photo_message(
     client: &Client,
     photo_url: &str,
     caption: &str,
-) -> Result<(), Box<dyn Error>> {
+) -> Result<Option<i64>, Box<dyn Error>> {
     let url = format!(
         "https://api.telegram.org/bot{}/sendPhoto",
         TELEGRAM_BOT_TOKEN
@@ -156,15 +182,28 @@ async fn send_photo_message(
     let response = client.post(&url).form(&params).send().await?;
     if !response.status().is_success() {
         let status = response.status();
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Fehlertext konnte nicht gelesen werden".to_string());
+        let error_bytes = response.bytes().await?;
+
+        // Try to parse the error response as JSON
+        if let Ok(telegram_error) = from_slice::<TelegramError>(&error_bytes) {
+            if telegram_error.error_code == Some(429) {
+                // Rate limiting error
+                if let Some(params) = telegram_error.parameters {
+                    if let Some(retry_after) = params.retry_after {
+                        return Ok(Some(retry_after));
+                    }
+                }
+
+                // Default retry after 30 seconds if not specified
+                return Ok(Some(30));
+            }
+        }
+        let error_body = String::from_utf8_lossy(&error_bytes);
         let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
         return Err(error_message.into());
     }
     println!("Fotonachricht erfolgreich gesendet.");
-    Ok(())
+    Ok(None)
 }
 
 /// Sends a text-only message to the configured Telegram group.
@@ -172,7 +211,7 @@ async fn send_photo_message(
 /// # Arguments
 /// * `client` - The `reqwest::Client` to use for the API call.
 /// * `message` - The HTML-formatted message string to send.
-async fn send_text_message(client: &Client, message: &str) -> Result<(), Box<dyn Error>> {
+async fn send_text_message(client: &Client, message: &str) -> Result<Option<i64>, Box<dyn Error>> {
     let url = format!(
         "https://api.telegram.org/bot{}/sendMessage",
         TELEGRAM_BOT_TOKEN
@@ -185,15 +224,29 @@ async fn send_text_message(client: &Client, message: &str) -> Result<(), Box<dyn
     let response = client.post(&url).form(&params).send().await?;
     if !response.status().is_success() {
         let status = response.status();
-        let error_body = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Fehlertext konnte nicht gelesen werden".to_string());
+        let error_bytes = response.bytes().await?;
+
+        // Try to parse the error response as JSON
+        if let Ok(telegram_error) = from_slice::<TelegramError>(&error_bytes) {
+            if telegram_error.error_code == Some(429) {
+                // Rate limiting error
+                if let Some(params) = telegram_error.parameters {
+                    if let Some(retry_after) = params.retry_after {
+                        return Ok(Some(retry_after));
+                    }
+                }
+
+                // Default retry after 30 seconds if not specified
+                return Ok(Some(30));
+            }
+        }
+
+        let error_body = String::from_utf8_lossy(&error_bytes);
         let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
         return Err(error_message.into());
     }
     println!("Textnachricht erfolgreich gesendet.");
-    Ok(())
+    Ok(None)
 }
 
 // --- Main Program ---
@@ -276,30 +329,120 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 );
 
                 // If the ad has an image, send a photo message. Otherwise, send a text message.
+                let mut send_success = false;
                 if let Some(image_url) = &ad.image_url {
-                    if let Err(e) = send_photo_message(&client, image_url, &caption).await {
-                        eprintln!(
-                            "Fehler beim Senden der Fotonachricht: {}. Fallback auf Textnachricht.",
-                            e
-                        );
+                    match send_photo_message(&client, image_url, &caption).await {
+                        Ok(None) => {
+                            // Success
+                            send_success = true;
+                        }
+                        Ok(Some(retry_after)) => {
+                            // Rate limiting, wait and retry
+                            eprintln!(
+                                "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch.",
+                                retry_after
+                            );
+                            sleep(Duration::from_secs(retry_after as u64)).await;
 
-                        // If sending the photo fails, try sending a text message instead.
-                        if let Err(e_text) = send_text_message(&client, &caption).await {
-                            eprintln!("Fehler beim Senden der Textnachricht: {}", e_text);
+                            // Retry once
+                            match send_photo_message(&client, image_url, &caption).await {
+                                Ok(None) => {
+                                    // Success on retry
+                                    send_success = true;
+                                }
+                                Ok(Some(retry_after)) => {
+                                    eprintln!(
+                                        "Erneute Rate Limiting. Warte {} Sekunden.",
+                                        retry_after
+                                    );
+                                    sleep(Duration::from_secs(retry_after as u64)).await;
+
+                                    // Final retry
+                                    if send_photo_message(&client, image_url, &caption)
+                                        .await
+                                        .is_ok()
+                                    {
+                                        send_success = true;
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Fehler beim erneuten Senden der Fotonachricht: {}",
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Fehler beim Senden der Fotonachricht: {}. Fallback auf Textnachricht.",
+                                e
+                            );
+
+                            // If sending the photo fails, try sending a text message instead.
+                            match send_text_message(&client, &caption).await {
+                                Ok(None) => {
+                                    // Success
+                                    send_success = true;
+                                }
+                                Ok(Some(retry_after)) => {
+                                    // Rate limiting, wait and retry
+                                    eprintln!(
+                                        "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch der Textnachricht.",
+                                        retry_after
+                                    );
+                                    sleep(Duration::from_secs(retry_after as u64)).await;
+
+                                    // Retry once
+                                    if send_text_message(&client, &caption).await.is_ok() {
+                                        send_success = true;
+                                    }
+                                }
+                                Err(e_text) => {
+                                    eprintln!("Fehler beim Senden der Textnachricht: {}", e_text);
+                                }
+                            }
                         }
                     }
                 } else {
-                    if let Err(e) = send_text_message(&client, &caption).await {
-                        eprintln!("Fehler beim Senden der Textnachricht: {}", e);
+                    match send_text_message(&client, &caption).await {
+                        Ok(None) => {
+                            // Success
+                            send_success = true;
+                        }
+                        Ok(Some(retry_after)) => {
+                            // Rate limiting, wait and retry
+                            eprintln!(
+                                "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch der Textnachricht.",
+                                retry_after
+                            );
+                            sleep(Duration::from_secs(retry_after as u64)).await;
+
+                            // Retry once
+                            if send_text_message(&client, &caption).await.is_ok() {
+                                send_success = true;
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("Fehler beim Senden der Textnachricht: {}", e);
+                        }
                     }
                 }
 
-                // Add the new ad's ID to our queue to preserve order.
-                seen_ads_queue.push_back(ad.id.clone());
+                // Only add the ad to seen_ads_queue if sending was successful
+                if send_success {
+                    // Add the new ad's ID to our queue to preserve order.
+                    seen_ads_queue.push_back(ad.id.clone());
 
-                // Increment counter for first run
-                if is_first_run {
-                    first_run_sent_count += 1;
+                    // Increment counter for first run
+                    if is_first_run {
+                        first_run_sent_count += 1;
+                    }
+                } else {
+                    eprintln!(
+                        "Nachricht für Anzeige '{}' wurde nicht erfolgreich gesendet und wird erneut versucht beim nächsten Durchlauf.",
+                        ad.title
+                    );
                 }
 
                 // Pause briefly to avoid hitting Telegram's rate limits.
