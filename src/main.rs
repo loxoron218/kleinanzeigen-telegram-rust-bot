@@ -21,6 +21,7 @@ const KLEINANZEIGEN_BASE_URL: &str = "https://www.kleinanzeigen.de/s-zu-verschen
 const KLEINANZEIGEN_URL_SUFFIX: &str = "/04105/c272l4257r10";
 const SEEN_ADS_FILE: &str = "seen_ads.json";
 const MAX_SEEN_ADS: usize = 1000;
+const FIRST_RUN_LIMIT: usize = 25;
 
 /// Represents a single advertisement listing from Kleinanzeigen.
 ///
@@ -213,6 +214,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Load the IDs of ads we've already notified about.
     let mut seen_ads_queue = load_seen_ads();
+    let is_first_run = seen_ads_queue.is_empty();
     println!(
         "{} bereits gesehene Anzeigen geladen.",
         seen_ads_queue.len()
@@ -221,6 +223,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // For fast lookups, create a HashSet from the queue.
     let seen_ads_set: HashSet<_> = seen_ads_queue.iter().cloned().collect();
     let mut new_ads_found_total = 0;
+
+    // Track how many ads we've sent on first run
+    let mut first_run_sent_count = 0;
 
     // A safety limit to prevent excessive requests.
     const MAX_PAGES_TO_SCAN: u32 = 10;
@@ -252,6 +257,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         // Process each ad found on the page.
         for ad in current_ads {
+            // For first run, limit the number of ads sent
+            if is_first_run && first_run_sent_count >= FIRST_RUN_LIMIT {
+                stop_paging = true;
+                break;
+            }
+
             if seen_ads_set.contains(&ad.id) {
                 // If we find an ad we've already processed, we assume all subsequent ads are also old.
                 stop_paging = true;
@@ -285,6 +296,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                 // Add the new ad's ID to our queue to preserve order.
                 seen_ads_queue.push_back(ad.id.clone());
+
+                // Increment counter for first run
+                if is_first_run {
+                    first_run_sent_count += 1;
+                }
 
                 // Pause briefly to avoid hitting Telegram's rate limits.
                 sleep(Duration::from_secs(2)).await;
