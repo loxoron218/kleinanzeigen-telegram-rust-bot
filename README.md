@@ -84,17 +84,16 @@ Kopieren Sie die folgende Konfiguration und fügen Sie sie in die Datei ein. Die
 ```ini
 [Unit]
 Description=Kleinanzeigen Telegram Bot
-After=network.target
 
 [Service]
 # 'user' durch Ihren tatsächlichen Benutzernamen ersetzen
 User=user
 
 # Das Arbeitsverzeichnis für die Anwendung festlegen
-WorkingDirectory=/home/user/.local/share/kleinanzeigen_rust_bot
+WorkingDirectory=/home/user/.local/share/kleinanzeigen-telegram-rust-bot
 
 # Pfad zum kompilierten Binary
-ExecStart=/home/user/.local/share/kleinanzeigen_rust_bot/target/release/kleinanzeigen_rust_bot
+ExecStart=/home/user/.local/share/telegram-rust-bot/target/release/telegram-rust-bot
 
 Restart=on-failure
 RestartSec=5s
@@ -105,16 +104,34 @@ WantedBy=multi-user.target
 
 **Hinweis:** `~` funktioniert in systemd-Service-Dateien nicht, daher müssen Sie den vollständigen Pfad wie `/home/user/` verwenden.
 
-### Schritt 3: Dienst aktivieren und starten
+## Schritt 3: Timer-Konfiguration hinzufügen
 
-Führen Sie die folgenden Befehle aus, um Ihren neuen Dienst zu installieren und zu starten:
+Erstellen Sie als Nächstes die entsprechende Timer-Unit-Datei. Speichern Sie diesen Inhalt als `kleinanzeigen.timer` im selben Verzeichnis `/etc/systemd/system/`.
+
+```ini
+[Unit]
+Description=Run Kleinanzeigen Telegram Bot every 5 minutes
+
+[Timer]
+# Definiert die Zeit für den Start des Timers
+OnBootSec=1min
+# Definiert das Intervall, in dem der Timer neu gestartet wird
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+```
+
+### Schritt 4: Dienst und Timer aktivieren und starten
+
+Führen Sie die folgenden Befehle aus, um Ihren neuen Dienst und Timer zu installieren und zu starten:
 
 ```bash
 # systemd neu laden, um die neue Datei zu erkennen
 sudo systemctl daemon-reload
 
-# Dienst für den Start beim Booten aktivieren
-sudo systemctl enable --now kleinanzeigen.service
+# Dienst und Timer für den Start beim Booten aktivieren
+sudo systemctl enable --now kleinanzeigen.service kleinanzeigen.timer
 ```
 
 ## Überprüfung des Dienstes
