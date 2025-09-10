@@ -8,7 +8,19 @@ Dies ist ein kleiner, effizienter Bot, der Kleinanzeigen nach neuen "Zu verschen
 
 Bevor Sie beginnen, stellen Sie sicher, dass die folgende Software installiert ist und Sie die notwendigen Telegram-Zugangsdaten haben.
 
-### Software-Installation ⚙️
+### Software-Installation
+
+  * **Build-Abhängigkeiten**
+    Erforderlich für das Kompilieren von Rust-Projekten, die C-Bibliotheken wie OpenSSL verwenden.
+
+      * **Für Debian/Ubuntu-basierte Systeme:**
+        ```bash
+        sudo apt install build-essential pkg-config libssl-dev
+        ```
+      * **Für Arch Linux-basierte Systeme:**
+        ```bash
+        sudo pacman -Syu base-devel pkg-config openssl
+        ```
 
   * **Rust Toolchain (inkl. Cargo)**
     Der empfohlene Weg, um die aktuellste Version zu erhalten, ist die Installation über die Paketquellen Ihrer Distribution:
@@ -143,7 +155,13 @@ ExecStart=/home/user/.local/share/kleinanzeigen-telegram-rust-bot/target/release
 
 ### Schritt 3: Timer-Konfiguration hinzufügen
 
-Erstellen Sie als Nächstes die entsprechende Timer-Unit-Datei. Speichern Sie diesen Inhalt als `kleinanzeigen.timer` im selben Verzeichnis `/etc/systemd/system/`.
+Erstellen Sie als Nächstes die entsprechende Timer-Unit-Datei mit Root-Rechten:
+
+```bash
+sudo nano /etc/systemd/system/kleinanzeigen.timer
+```
+
+Fügen Sie den folgenden Inhalt in die Datei ein:
 
 ```ini
 [Unit]
