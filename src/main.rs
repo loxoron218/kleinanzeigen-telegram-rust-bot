@@ -42,10 +42,12 @@ struct Ad {
 #[derive(Debug, Deserialize)]
 struct TelegramError {
     /// Whether the request was successful.
+    #[allow(dead_code)]
     ok: bool,
     /// The error code.
     error_code: Option<i32>,
     /// The error description.
+    #[allow(dead_code)]
     description: Option<String>,
     /// Additional parameters for the error.
     parameters: Option<TelegramErrorParameters>,
@@ -64,10 +66,19 @@ struct TelegramErrorParameters {
 /// If the file does not exist or contains invalid data, it returns an empty queue.
 /// A VecDeque is used to efficiently remove old items from the front.
 fn load_seen_ads() -> VecDeque<String> {
-    read_to_string(SEEN_ADS_FILE)
-        .ok()
-        .and_then(|content| from_str(&content).ok())
-        .unwrap_or_else(VecDeque::new)
+    match read_to_string(SEEN_ADS_FILE) {
+        Ok(content) => match from_str(&content) {
+            Ok(queue) => queue,
+            Err(e) => {
+                eprintln!("Fehler beim Parsen der Datei {}: {}", SEEN_ADS_FILE, e);
+                VecDeque::new()
+            }
+        },
+        Err(e) => {
+            eprintln!("Fehler beim Lesen der Datei {}: {}", SEEN_ADS_FILE, e);
+            VecDeque::new()
+        }
+    }
 }
 
 /// Saves the provided queue of seen ad IDs to a JSON file.
@@ -273,6 +284,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         seen_ads_queue.len()
     );
 
+    // Debug print the first few seen ad IDs
+    let first_few: Vec<&String> = seen_ads_queue.iter().take(5).collect();
+    println!("Erste gesehene IDs: {:?}", first_few);
+
     // For fast lookups, create a HashSet from the queue.
     let seen_ads_set: HashSet<_> = seen_ads_queue.iter().cloned().collect();
     let mut new_ads_found_total = 0;
@@ -282,6 +297,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // A safety limit to prevent excessive requests.
     const MAX_PAGES_TO_SCAN: u32 = 10;
+
+    // --- HYBRID LOGIC IMPLEMENTATION ---
+    // 1. Collect all ads from pages first before processing
+    let mut all_ads: Vec<Ad> = Vec::new();
+    let mut stop_paging = false;
 
     // Loop through the pages of the search results.
     for page in 1..=MAX_PAGES_TO_SCAN {
@@ -306,154 +326,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
             );
             break;
         }
-        let mut stop_paging = false;
 
-        // Process each ad found on the page.
-        for ad in current_ads {
-            // For first run, limit the number of ads sent
-            if is_first_run && first_run_sent_count >= FIRST_RUN_LIMIT {
-                stop_paging = true;
-                break;
-            }
-
-            if seen_ads_set.contains(&ad.id) {
-                // If we find an ad we've already processed, we assume all subsequent ads are also old.
-                stop_paging = true;
-            } else {
-                // This is a new ad.
-                new_ads_found_total += 1;
-                println!("Neue Anzeige gefunden: {}", ad.title);
-                let caption = format!(
-                    "<b>Neuer kostenloser Artikel gefunden!</b>\n<b>Titel:</b> {}\n<a href='{}'>Anzeige ansehen</a>",
-                    ad.title, ad.link
-                );
-
-                // If the ad has an image, send a photo message. Otherwise, send a text message.
-                let mut send_success = false;
-                if let Some(image_url) = &ad.image_url {
-                    match send_photo_message(&client, image_url, &caption).await {
-                        Ok(None) => {
-                            // Success
-                            send_success = true;
-                        }
-                        Ok(Some(retry_after)) => {
-                            // Rate limiting, wait and retry
-                            eprintln!(
-                                "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch.",
-                                retry_after
-                            );
-                            sleep(Duration::from_secs(retry_after as u64)).await;
-
-                            // Retry once
-                            match send_photo_message(&client, image_url, &caption).await {
-                                Ok(None) => {
-                                    // Success on retry
-                                    send_success = true;
-                                }
-                                Ok(Some(retry_after)) => {
-                                    eprintln!(
-                                        "Erneute Rate Limiting. Warte {} Sekunden.",
-                                        retry_after
-                                    );
-                                    sleep(Duration::from_secs(retry_after as u64)).await;
-
-                                    // Final retry
-                                    if send_photo_message(&client, image_url, &caption)
-                                        .await
-                                        .is_ok()
-                                    {
-                                        send_success = true;
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!(
-                                        "Fehler beim erneuten Senden der Fotonachricht: {}",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!(
-                                "Fehler beim Senden der Fotonachricht: {}. Fallback auf Textnachricht.",
-                                e
-                            );
-
-                            // If sending the photo fails, try sending a text message instead.
-                            match send_text_message(&client, &caption).await {
-                                Ok(None) => {
-                                    // Success
-                                    send_success = true;
-                                }
-                                Ok(Some(retry_after)) => {
-                                    // Rate limiting, wait and retry
-                                    eprintln!(
-                                        "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch der Textnachricht.",
-                                        retry_after
-                                    );
-                                    sleep(Duration::from_secs(retry_after as u64)).await;
-
-                                    // Retry once
-                                    if send_text_message(&client, &caption).await.is_ok() {
-                                        send_success = true;
-                                    }
-                                }
-                                Err(e_text) => {
-                                    eprintln!("Fehler beim Senden der Textnachricht: {}", e_text);
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    match send_text_message(&client, &caption).await {
-                        Ok(None) => {
-                            // Success
-                            send_success = true;
-                        }
-                        Ok(Some(retry_after)) => {
-                            // Rate limiting, wait and retry
-                            eprintln!(
-                                "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch der Textnachricht.",
-                                retry_after
-                            );
-                            sleep(Duration::from_secs(retry_after as u64)).await;
-
-                            // Retry once
-                            if send_text_message(&client, &caption).await.is_ok() {
-                                send_success = true;
-                            }
-                        }
-                        Err(e) => {
-                            eprintln!("Fehler beim Senden der Textnachricht: {}", e);
-                        }
-                    }
-                }
-
-                // Only add the ad to seen_ads_queue if sending was successful
-                if send_success {
-                    // Add the new ad's ID to our queue to preserve order.
-                    seen_ads_queue.push_back(ad.id.clone());
-
-                    // Increment counter for first run
-                    if is_first_run {
-                        first_run_sent_count += 1;
-                    }
-                } else {
-                    eprintln!(
-                        "Nachricht für Anzeige '{}' wurde nicht erfolgreich gesendet und wird erneut versucht beim nächsten Durchlauf.",
-                        ad.title
-                    );
-                }
-
-                // Pause briefly to avoid hitting Telegram's rate limits.
-                sleep(Duration::from_secs(2)).await;
-            }
+        // Check if any ads on this page were already seen
+        if current_ads.iter().any(|ad| seen_ads_set.contains(&ad.id)) {
+            // Set flag to stop after finishing this page
+            stop_paging = true;
         }
 
-        // If we found an old ad, we can stop crawling further pages.
+        // Add all ads from this page to our master list
+        all_ads.extend(current_ads);
+
+        // If we found any old ads on this page, we can stop crawling further pages.
         if stop_paging {
             println!(
-                "Bereits gesehene Anzeige auf Seite {} gefunden. Scan wird beendet.",
+                "Bereits gesehene Anzeige auf Seite {} gefunden. Scan wird nach dieser Seite beendet.",
                 page
             );
             break;
@@ -461,6 +347,138 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         // Be polite and wait a moment before scraping the next page.
         sleep(Duration::from_secs(1)).await;
+    }
+
+    // 2. Process all collected ads afterward, sending notifications only for new ones
+    for ad in all_ads {
+        // For first run, limit the number of ads sent
+        if is_first_run && first_run_sent_count >= FIRST_RUN_LIMIT {
+            break;
+        }
+
+        if !seen_ads_set.contains(&ad.id) {
+            // This is a new ad.
+            new_ads_found_total += 1;
+            println!("Neue Anzeige gefunden: {}", ad.title);
+            let caption = format!(
+                "<b>Neuer kostenloser Artikel gefunden!</b>\n<b>Titel:</b> {}\n<a href='{}'>Anzeige ansehen</a>",
+                ad.title, ad.link
+            );
+
+            // If the ad has an image, send a photo message. Otherwise, send a text message.
+            let mut send_success = false;
+            if let Some(image_url) = &ad.image_url {
+                match send_photo_message(&client, image_url, &caption).await {
+                    Ok(None) => {
+                        // Success
+                        send_success = true;
+                    }
+                    Ok(Some(retry_after)) => {
+                        // Rate limiting, wait and retry
+                        eprintln!(
+                            "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch.",
+                            retry_after
+                        );
+                        sleep(Duration::from_secs(retry_after as u64)).await;
+
+                        // Retry once
+                        match send_photo_message(&client, image_url, &caption).await {
+                            Ok(None) => {
+                                // Success on retry
+                                send_success = true;
+                            }
+                            Ok(Some(retry_after)) => {
+                                eprintln!("Erneute Rate Limiting. Warte {} Sekunden.", retry_after);
+                                sleep(Duration::from_secs(retry_after as u64)).await;
+
+                                // Final retry
+                                if send_photo_message(&client, image_url, &caption)
+                                    .await
+                                    .is_ok()
+                                {
+                                    send_success = true;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("Fehler beim erneuten Senden der Fotonachricht: {}", e);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Fehler beim Senden der Fotonachricht: {}. Fallback auf Textnachricht.",
+                            e
+                        );
+
+                        // If sending the photo fails, try sending a text message instead.
+                        match send_text_message(&client, &caption).await {
+                            Ok(None) => {
+                                // Success
+                                send_success = true;
+                            }
+                            Ok(Some(retry_after)) => {
+                                // Rate limiting, wait and retry
+                                eprintln!(
+                                    "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch der Textnachricht.",
+                                    retry_after
+                                );
+                                sleep(Duration::from_secs(retry_after as u64)).await;
+
+                                // Retry once
+                                if send_text_message(&client, &caption).await.is_ok() {
+                                    send_success = true;
+                                }
+                            }
+                            Err(e_text) => {
+                                eprintln!("Fehler beim Senden der Textnachricht: {}", e_text);
+                            }
+                        }
+                    }
+                }
+            } else {
+                match send_text_message(&client, &caption).await {
+                    Ok(None) => {
+                        // Success
+                        send_success = true;
+                    }
+                    Ok(Some(retry_after)) => {
+                        // Rate limiting, wait and retry
+                        eprintln!(
+                            "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch der Textnachricht.",
+                            retry_after
+                        );
+                        sleep(Duration::from_secs(retry_after as u64)).await;
+
+                        // Retry once
+                        if send_text_message(&client, &caption).await.is_ok() {
+                            send_success = true;
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Fehler beim Senden der Textnachricht: {}", e);
+                    }
+                }
+            }
+
+            // Only add the ad to seen_ads_queue if sending was successful
+            if send_success {
+                // Add the new ad's ID to our queue to preserve order.
+                seen_ads_queue.push_back(ad.id.clone());
+
+                // Increment counter for first run
+                if is_first_run {
+                    first_run_sent_count += 1;
+                }
+            } else {
+                eprintln!(
+                    "Nachricht für Anzeige '{}' wurde nicht erfolgreich gesendet und wird erneut versucht beim nächsten Durchlauf.",
+                    ad.title
+                );
+            }
+
+            // Pause briefly to avoid hitting Telegram's rate limits.
+            sleep(Duration::from_secs(2)).await;
+        }
     }
 
     // After scanning, check if we found any new ads.
