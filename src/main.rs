@@ -184,6 +184,8 @@ async fn send_photo_message(
         "https://api.telegram.org/bot{}/sendPhoto",
         TELEGRAM_BOT_TOKEN
     );
+
+    // Use form data to match what curl is doing, with HTML formatting
     let params = [
         ("chat_id", TELEGRAM_CHAT_ID),
         ("photo", photo_url),
@@ -191,30 +193,34 @@ async fn send_photo_message(
         ("parse_mode", "HTML"),
     ];
     let response = client.post(&url).form(&params).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_bytes = response.bytes().await?;
 
-        // Try to parse the error response as JSON
-        if let Ok(telegram_error) = from_slice::<TelegramError>(&error_bytes) {
-            if telegram_error.error_code == Some(429) {
-                // Rate limiting error
-                if let Some(params) = telegram_error.parameters {
-                    if let Some(retry_after) = params.retry_after {
-                        return Ok(Some(retry_after));
-                    }
-                }
-
-                // Default retry after 30 seconds if not specified
-                return Ok(Some(30));
-            }
-        }
-        let error_body = String::from_utf8_lossy(&error_bytes);
-        let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
-        return Err(error_message.into());
+    // Check if the response is successful
+    if response.status().is_success() {
+        println!("Fotonachricht erfolgreich gesendet.");
+        return Ok(None);
     }
-    println!("Fotonachricht erfolgreich gesendet.");
-    Ok(None)
+
+    // Handle error response
+    let status = response.status();
+    let error_bytes = response.bytes().await?;
+
+    // Try to parse the error response as JSON
+    if let Ok(telegram_error) = from_slice::<TelegramError>(&error_bytes) {
+        if telegram_error.error_code == Some(429) {
+            // Rate limiting error
+            if let Some(params) = telegram_error.parameters {
+                if let Some(retry_after) = params.retry_after {
+                    return Ok(Some(retry_after));
+                }
+            }
+
+            // Default retry after 30 seconds if not specified
+            return Ok(Some(30));
+        }
+    }
+    let error_body = String::from_utf8_lossy(&error_bytes);
+    let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
+    Err(error_message.into())
 }
 
 /// Sends a text-only message to the configured Telegram group.
@@ -227,37 +233,42 @@ async fn send_text_message(client: &Client, message: &str) -> Result<Option<i64>
         "https://api.telegram.org/bot{}/sendMessage",
         TELEGRAM_BOT_TOKEN
     );
+
+    // Use form data to match what curl is doing, with HTML formatting
     let params = [
         ("chat_id", TELEGRAM_CHAT_ID),
         ("text", message),
         ("parse_mode", "HTML"),
     ];
     let response = client.post(&url).form(&params).send().await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_bytes = response.bytes().await?;
 
-        // Try to parse the error response as JSON
-        if let Ok(telegram_error) = from_slice::<TelegramError>(&error_bytes) {
-            if telegram_error.error_code == Some(429) {
-                // Rate limiting error
-                if let Some(params) = telegram_error.parameters {
-                    if let Some(retry_after) = params.retry_after {
-                        return Ok(Some(retry_after));
-                    }
-                }
-
-                // Default retry after 30 seconds if not specified
-                return Ok(Some(30));
-            }
-        }
-
-        let error_body = String::from_utf8_lossy(&error_bytes);
-        let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
-        return Err(error_message.into());
+    // Check if the response is successful
+    if response.status().is_success() {
+        println!("Textnachricht erfolgreich gesendet.");
+        return Ok(None);
     }
-    println!("Textnachricht erfolgreich gesendet.");
-    Ok(None)
+
+    // Handle error response
+    let status = response.status();
+    let error_bytes = response.bytes().await?;
+
+    // Try to parse the error response as JSON
+    if let Ok(telegram_error) = from_slice::<TelegramError>(&error_bytes) {
+        if telegram_error.error_code == Some(429) {
+            // Rate limiting error
+            if let Some(params) = telegram_error.parameters {
+                if let Some(retry_after) = params.retry_after {
+                    return Ok(Some(retry_after));
+                }
+            }
+
+            // Default retry after 30 seconds if not specified
+            return Ok(Some(30));
+        }
+    }
+    let error_body = String::from_utf8_lossy(&error_bytes);
+    let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
+    Err(error_message.into())
 }
 
 // --- Main Program ---
