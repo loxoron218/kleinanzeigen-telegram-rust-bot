@@ -9,7 +9,7 @@ use reqwest::Client;
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use serde_json::{from_slice, from_str, to_string_pretty};
-use tokio::time::sleep;
+use tokio::{main, time::sleep};
 
 // --- Configuration ---
 // IMPORTANT: Replace these with your actual token and chat ID
@@ -41,14 +41,8 @@ struct Ad {
 /// Represents a Telegram API error response.
 #[derive(Debug, Deserialize)]
 struct TelegramError {
-    /// Whether the request was successful.
-    #[allow(dead_code)]
-    ok: bool,
     /// The error code.
     error_code: Option<i32>,
-    /// The error description.
-    #[allow(dead_code)]
-    description: Option<String>,
     /// Additional parameters for the error.
     parameters: Option<TelegramErrorParameters>,
 }
@@ -160,6 +154,8 @@ async fn scrape_kleinanzeigen_page(client: &Client, url: &str) -> Result<Vec<Ad>
             }
         }
     }
+
+    // Return the vector of scraped ads
     Ok(listings)
 }
 
@@ -192,6 +188,8 @@ async fn send_photo_message(
         ("caption", caption),
         ("parse_mode", "HTML"),
     ];
+
+    // Send the POST request to the Telegram API with the photo and caption
     let response = client.post(&url).form(&params).send().await?;
 
     // Check if the response is successful
@@ -218,6 +216,8 @@ async fn send_photo_message(
             return Ok(Some(30));
         }
     }
+
+    // Construct and return a detailed error message with status code and response body
     let error_body = String::from_utf8_lossy(&error_bytes);
     let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
     Err(error_message.into())
@@ -240,6 +240,8 @@ async fn send_text_message(client: &Client, message: &str) -> Result<Option<i64>
         ("text", message),
         ("parse_mode", "HTML"),
     ];
+
+    // Send the POST request to the Telegram API with the text message
     let response = client.post(&url).form(&params).send().await?;
 
     // Check if the response is successful
@@ -266,13 +268,15 @@ async fn send_text_message(client: &Client, message: &str) -> Result<Option<i64>
             return Ok(Some(30));
         }
     }
+
+    // Construct and return a detailed error message with status code and response body
     let error_body = String::from_utf8_lossy(&error_bytes);
     let error_message = format!("Telegram API Fehler: {} - {}", status, error_body);
     Err(error_message.into())
 }
 
 // --- Main Program ---
-#[tokio::main]
+#[main]
 async fn main() -> Result<(), Box<dyn Error>> {
     // A simple guard to prevent running with placeholder credentials.
     if TELEGRAM_BOT_TOKEN == "YOUR_TELEGRAM_BOT_TOKEN" || TELEGRAM_CHAT_ID == "YOUR_GROUP_CHAT_ID" {
@@ -357,6 +361,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
 
         // Be polite and wait a moment before scraping the next page.
+        // Wait for 1 second before scraping the next page to be respectful to the server
         sleep(Duration::from_secs(1)).await;
     }
 
@@ -390,6 +395,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch.",
                             retry_after
                         );
+
+                        // Wait for the specified duration before retrying
                         sleep(Duration::from_secs(retry_after as u64)).await;
 
                         // Retry once
@@ -400,6 +407,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                             Ok(Some(retry_after)) => {
                                 eprintln!("Erneute Rate Limiting. Warte {} Sekunden.", retry_after);
+
+                                // Wait for the specified duration before final retry
                                 sleep(Duration::from_secs(retry_after as u64)).await;
 
                                 // Final retry
@@ -458,6 +467,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             "Rate limiting erkannt. Warte {} Sekunden vor erneutem Versuch der Textnachricht.",
                             retry_after
                         );
+
+                        // Wait for the specified duration before retrying
                         sleep(Duration::from_secs(retry_after as u64)).await;
 
                         // Retry once
@@ -488,6 +499,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             }
 
             // Pause briefly to avoid hitting Telegram's rate limits.
+            // Wait for 2 seconds between sending messages to avoid rate limiting
             sleep(Duration::from_secs(2)).await;
         }
     }
@@ -519,6 +531,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         println!("Keine neuen Anzeigen auf den gescannten Seiten gefunden.");
     }
+
+    // Print final message and return success
     println!("Skript beendet.");
     Ok(())
 }
